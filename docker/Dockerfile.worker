@@ -1,0 +1,55 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package files
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/domain/package.json packages/domain/
+COPY packages/db/package.json packages/db/
+COPY packages/observability/package.json packages/observability/
+COPY packages/agents/package.json packages/agents/
+COPY apps/worker/package.json apps/worker/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY tsconfig.base.json ./
+COPY packages/ packages/
+COPY apps/worker/ apps/worker/
+
+# Generate Prisma client
+RUN cd packages/db && pnpm db:generate
+
+# Build
+RUN pnpm -r build
+
+# Production stage
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 stockos
+USER stockos
+
+# Copy built files
+COPY --from=builder --chown=stockos:nodejs /app/package.json ./
+COPY --from=builder --chown=stockos:nodejs /app/pnpm-workspace.yaml ./
+COPY --from=builder --chown=stockos:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=stockos:nodejs /app/packages ./packages
+COPY --from=builder --chown=stockos:nodejs /app/apps/worker ./apps/worker
+
+ENV NODE_ENV=production
+ENV WORKER_MODE=all
+
+CMD ["node", "apps/worker/dist/main.js"]

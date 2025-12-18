@@ -1,0 +1,727 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// MULTI-TENANT CORE
+// ============================================================================
+
+model Tenant {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @db.VarChar(255)
+  slug         String   @unique @db.VarChar(100)
+  settings     Json     @default("{}")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  warehouses       Warehouse[]
+  users            User[]
+  products         Product[]
+  categories       Category[]
+  suppliers        Supplier[]
+  purchaseOrders   PurchaseOrder[]
+  salesOrders      SalesOrder[]
+  locations        Location[]
+  stockLevels      StockLevel[]
+  movements        Movement[]
+  reservations     Reservation[]
+  lotBatches       LotBatch[]
+  receipts         Receipt[]
+  transfers        Transfer[]
+  cycleCountPlans  CycleCountPlan[]
+  events           EventStore[]
+  outboxMessages   OutboxMessage[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  externalId   String?  @map("external_id") @db.VarChar(255)
+  email        String   @db.VarChar(255)
+  name         String   @db.VarChar(255)
+  role         String   @db.VarChar(50)
+  permissions  String[] @default([])
+  warehouseIds String[] @map("warehouse_ids") @db.Uuid
+  isActive     Boolean  @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+// ============================================================================
+// WAREHOUSE & LOCATIONS
+// ============================================================================
+
+model Warehouse {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  code           String   @db.VarChar(50)
+  name           String   @db.VarChar(255)
+  address        Json?
+  timezone       String   @default("UTC") @db.VarChar(50)
+  settings       Json     @default("{}")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant         Tenant     @relation(fields: [tenantId], references: [id])
+  locations      Location[]
+  stockLevels    StockLevel[]
+  movements      Movement[]
+  reservations   Reservation[]
+  receipts       Receipt[]
+  transfers      Transfer[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("warehouses")
+}
+
+model Location {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  warehouseId        String   @map("warehouse_id") @db.Uuid
+  code               String   @db.VarChar(50)
+  zone               String   @db.VarChar(50)
+  aisle              String?  @db.VarChar(20)
+  rack               String?  @db.VarChar(20)
+  shelf              String?  @db.VarChar(20)
+  bin                String?  @db.VarChar(20)
+  type               String   @db.VarChar(50) // BULK, PICK, STAGING, RECEIVING, SHIPPING, QUARANTINE
+  temperatureZone    String   @default("AMBIENT") @map("temperature_zone") @db.VarChar(20)
+  maxWeight          Decimal? @map("max_weight") @db.Decimal(10, 2)
+  maxVolume          Decimal? @map("max_volume") @db.Decimal(10, 4)
+  maxItems           Int?     @map("max_items")
+  pickSequence       Int?     @map("pick_sequence")
+  isActive           Boolean  @default(true) @map("is_active")
+  allowMixedProducts Boolean  @default(true) @map("allow_mixed_products")
+  allowMixedLots     Boolean  @default(true) @map("allow_mixed_lots")
+  isHazmatCertified  Boolean  @default(false) @map("is_hazmat_certified")
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant       @relation(fields: [tenantId], references: [id])
+  warehouse        Warehouse    @relation(fields: [warehouseId], references: [id])
+  stockLevels      StockLevel[]
+  movementsFrom    Movement[]   @relation("FromLocation")
+  movementsTo      Movement[]   @relation("ToLocation")
+
+  @@unique([tenantId, warehouseId, code])
+  @@index([tenantId, warehouseId])
+  @@index([tenantId, zone])
+  @@map("locations")
+}
+
+// ============================================================================
+// PRODUCTS & INVENTORY
+// ============================================================================
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String   @db.VarChar(255)
+  parentId  String?  @map("parent_id") @db.Uuid
+  path      String   @db.VarChar(1000)
+  level     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant     @relation(fields: [tenantId], references: [id])
+  parent   Category?  @relation("CategoryParent", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryParent")
+  products Product[]
+
+  @@unique([tenantId, path])
+  @@index([tenantId])
+  @@map("categories")
+}
+
+model Product {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  sku                 String   @db.VarChar(100)
+  name                String   @db.VarChar(255)
+  description         String?
+  barcode             String?  @db.VarChar(100)
+  categoryId          String?  @map("category_id") @db.Uuid
+  unitOfMeasure       String   @default("UNIT") @map("unit_of_measure") @db.VarChar(20)
+  weight              Decimal? @db.Decimal(10, 4)
+  length              Decimal? @db.Decimal(10, 2)
+  width               Decimal? @db.Decimal(10, 2)
+  height              Decimal? @db.Decimal(10, 2)
+  volume              Decimal? @db.Decimal(10, 4)
+  abcClass            String?  @map("abc_class") @db.VarChar(1)
+  xyzClass            String?  @map("xyz_class") @db.VarChar(1)
+  reorderPoint        Int?     @map("reorder_point")
+  safetyStock         Int?     @map("safety_stock")
+  maxStock            Int?     @map("max_stock")
+  leadTimeDays        Int?     @map("lead_time_days")
+  shelfLifeDays       Int?     @map("shelf_life_days")
+  temperatureRequired String?  @map("temperature_required") @db.VarChar(20)
+  isHazmat            Boolean  @default(false) @map("is_hazmat")
+  isSerialTracked     Boolean  @default(false) @map("is_serial_tracked")
+  isLotTracked        Boolean  @default(false) @map("is_lot_tracked")
+  isActive            Boolean  @default(true) @map("is_active")
+  metadata            Json     @default("{}")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  category         Category?            @relation(fields: [categoryId], references: [id])
+  variants         ProductVariant[]
+  stockLevels      StockLevel[]
+  movements        Movement[]
+  reservations     Reservation[]
+  lotBatches       LotBatch[]
+  purchaseLines    PurchaseOrderLine[]
+  salesLines       SalesOrderLine[]
+  receiptLines     ReceiptLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, barcode])
+  @@map("products")
+}
+
+model ProductVariant {
+  id          String   @id @default(uuid()) @db.Uuid
+  productId   String   @map("product_id") @db.Uuid
+  sku         String   @db.VarChar(100)
+  name        String   @db.VarChar(255)
+  attributes  Json     @default("{}")
+  barcode     String?  @db.VarChar(100)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product      Product       @relation(fields: [productId], references: [id])
+  stockLevels  StockLevel[]
+  movements    Movement[]
+  reservations Reservation[]
+
+  @@unique([productId, sku])
+  @@map("product_variants")
+}
+
+model LotBatch {
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  productId             String    @map("product_id") @db.Uuid
+  lotNumber             String    @map("lot_number") @db.VarChar(100)
+  batchNumber           String?   @map("batch_number") @db.VarChar(100)
+  expirationDate        DateTime? @map("expiration_date") @db.Date
+  manufactureDate       DateTime? @map("manufacture_date") @db.Date
+  receivedAt            DateTime  @map("received_at")
+  supplierId            String?   @map("supplier_id") @db.Uuid
+  status                String    @default("AVAILABLE") @db.VarChar(20) // AVAILABLE, QUARANTINE, EXPIRED, HOLD
+  certificateOfAnalysis String?   @map("certificate_of_analysis")
+  metadata              Json      @default("{}")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  product      Product       @relation(fields: [productId], references: [id])
+  supplier     Supplier?     @relation(fields: [supplierId], references: [id])
+  stockLevels  StockLevel[]
+  movements    Movement[]
+  reservations Reservation[]
+
+  @@unique([tenantId, productId, lotNumber])
+  @@index([tenantId, productId])
+  @@index([tenantId, expirationDate])
+  @@map("lot_batches")
+}
+
+model StockLevel {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  warehouseId       String    @map("warehouse_id") @db.Uuid
+  productId         String    @map("product_id") @db.Uuid
+  variantId         String?   @map("variant_id") @db.Uuid
+  locationId        String    @map("location_id") @db.Uuid
+  lotBatchId        String?   @map("lot_batch_id") @db.Uuid
+  quantityOnHand    Int       @default(0) @map("quantity_on_hand")
+  quantityReserved  Int       @default(0) @map("quantity_reserved")
+  quantityAvailable Int       @default(0) @map("quantity_available")
+  quantityInbound   Int       @default(0) @map("quantity_inbound")
+  quantityOutbound  Int       @default(0) @map("quantity_outbound")
+  lastMovementAt    DateTime? @map("last_movement_at")
+  rowVersion        Int       @default(1) @map("row_version")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id])
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
+  product   Product         @relation(fields: [productId], references: [id])
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  location  Location        @relation(fields: [locationId], references: [id])
+  lotBatch  LotBatch?       @relation(fields: [lotBatchId], references: [id])
+
+  @@unique([tenantId, warehouseId, productId, locationId, lotBatchId])
+  @@index([tenantId, warehouseId, productId])
+  @@index([tenantId, locationId])
+  @@map("stock_levels")
+}
+
+model Movement {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  warehouseId     String   @map("warehouse_id") @db.Uuid
+  movementType    String   @map("movement_type") @db.VarChar(50)
+  productId       String   @map("product_id") @db.Uuid
+  variantId       String?  @map("variant_id") @db.Uuid
+  lotBatchId      String?  @map("lot_batch_id") @db.Uuid
+  fromLocationId  String?  @map("from_location_id") @db.Uuid
+  toLocationId    String?  @map("to_location_id") @db.Uuid
+  quantity        Int
+  uom             String   @default("UNIT") @db.VarChar(20)
+  unitCost        Decimal? @map("unit_cost") @db.Decimal(10, 4)
+  totalCost       Decimal? @map("total_cost") @db.Decimal(12, 4)
+  referenceType   String?  @map("reference_type") @db.VarChar(50)
+  referenceId     String?  @map("reference_id") @db.Uuid
+  referenceLineId String?  @map("reference_line_id") @db.Uuid
+  reasonCode      String?  @map("reason_code") @db.VarChar(50)
+  notes           String?
+  performedBy     String   @map("performed_by") @db.VarChar(255)
+  performedAt     DateTime @map("performed_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  warehouse    Warehouse       @relation(fields: [warehouseId], references: [id])
+  product      Product         @relation(fields: [productId], references: [id])
+  variant      ProductVariant? @relation(fields: [variantId], references: [id])
+  lotBatch     LotBatch?       @relation(fields: [lotBatchId], references: [id])
+  fromLocation Location?       @relation("FromLocation", fields: [fromLocationId], references: [id])
+  toLocation   Location?       @relation("ToLocation", fields: [toLocationId], references: [id])
+
+  @@index([tenantId, warehouseId, createdAt])
+  @@index([tenantId, productId, createdAt])
+  @@index([tenantId, referenceType, referenceId])
+  @@map("movements")
+}
+
+model Reservation {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  warehouseId       String    @map("warehouse_id") @db.Uuid
+  productId         String    @map("product_id") @db.Uuid
+  variantId         String?   @map("variant_id") @db.Uuid
+  stockLevelId      String?   @map("stock_level_id") @db.Uuid
+  lotBatchId        String?   @map("lot_batch_id") @db.Uuid
+  quantity          Int
+  quantityFulfilled Int       @default(0) @map("quantity_fulfilled")
+  referenceType     String    @map("reference_type") @db.VarChar(50)
+  referenceId       String    @map("reference_id") @db.Uuid
+  referenceLineId   String?   @map("reference_line_id") @db.Uuid
+  status            String    @default("ACTIVE") @db.VarChar(20) // ACTIVE, FULFILLED, CANCELLED, EXPIRED
+  expiresAt         DateTime? @map("expires_at")
+  createdBy         String    @map("created_by") @db.VarChar(255)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id])
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
+  product   Product         @relation(fields: [productId], references: [id])
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  lotBatch  LotBatch?       @relation(fields: [lotBatchId], references: [id])
+
+  @@index([tenantId, warehouseId, productId, status])
+  @@index([tenantId, referenceType, referenceId])
+  @@index([tenantId, expiresAt])
+  @@map("reservations")
+}
+
+// ============================================================================
+// SUPPLIERS & PURCHASE ORDERS
+// ============================================================================
+
+model Supplier {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  code         String   @db.VarChar(50)
+  name         String   @db.VarChar(255)
+  contactName  String?  @map("contact_name") @db.VarChar(255)
+  email        String?  @db.VarChar(255)
+  phone        String?  @db.VarChar(50)
+  address      Json?
+  leadTimeDays Int?     @map("lead_time_days")
+  rating       Decimal? @db.Decimal(3, 2)
+  isActive     Boolean  @default(true) @map("is_active")
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrders PurchaseOrder[]
+  lotBatches     LotBatch[]
+  receipts       Receipt[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  orderNumber      String    @map("order_number") @db.VarChar(50)
+  supplierId       String    @map("supplier_id") @db.Uuid
+  status           String    @default("DRAFT") @db.VarChar(20)
+  expectedDate     DateTime? @map("expected_date") @db.Date
+  totalAmount      Decimal?  @map("total_amount") @db.Decimal(12, 2)
+  currency         String    @default("USD") @db.VarChar(3)
+  notes            String?
+  approvedBy       String?   @map("approved_by") @db.VarChar(255)
+  approvedAt       DateTime? @map("approved_at")
+  createdBy        String    @map("created_by") @db.VarChar(255)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id])
+  supplier Supplier            @relation(fields: [supplierId], references: [id])
+  lines    PurchaseOrderLine[]
+  receipts Receipt[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, supplierId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id                String   @id @default(uuid()) @db.Uuid
+  purchaseOrderId   String   @map("purchase_order_id") @db.Uuid
+  lineNumber        Int      @map("line_number")
+  productId         String   @map("product_id") @db.Uuid
+  quantityOrdered   Int      @map("quantity_ordered")
+  quantityReceived  Int      @default(0) @map("quantity_received")
+  unitPrice         Decimal? @map("unit_price") @db.Decimal(10, 4)
+  status            String   @default("PENDING") @db.VarChar(20)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  product       Product       @relation(fields: [productId], references: [id])
+  receiptLines  ReceiptLine[]
+
+  @@unique([purchaseOrderId, lineNumber])
+  @@map("purchase_order_lines")
+}
+
+// ============================================================================
+// RECEIVING
+// ============================================================================
+
+model Receipt {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @map("tenant_id") @db.Uuid
+  warehouseId        String   @map("warehouse_id") @db.Uuid
+  receiptNumber      String   @map("receipt_number") @db.VarChar(50)
+  purchaseOrderId    String?  @map("purchase_order_id") @db.Uuid
+  supplierId         String?  @map("supplier_id") @db.Uuid
+  status             String   @default("PENDING") @db.VarChar(20)
+  carrier            String?  @db.VarChar(100)
+  trackingNumber     String?  @map("tracking_number") @db.VarChar(100)
+  deliveryNoteNumber String?  @map("delivery_note_number") @db.VarChar(100)
+  qualityCheckReq    Boolean  @default(false) @map("quality_check_required")
+  notes              String?
+  receivedBy         String?  @map("received_by") @db.VarChar(255)
+  receivedAt         DateTime? @map("received_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  warehouse     Warehouse     @relation(fields: [warehouseId], references: [id])
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  supplier      Supplier?     @relation(fields: [supplierId], references: [id])
+  lines         ReceiptLine[]
+
+  @@unique([tenantId, receiptNumber])
+  @@index([tenantId, warehouseId, status])
+  @@map("receipts")
+}
+
+model ReceiptLine {
+  id                  String   @id @default(uuid()) @db.Uuid
+  receiptId           String   @map("receipt_id") @db.Uuid
+  lineNumber          Int      @map("line_number")
+  purchaseOrderLineId String?  @map("purchase_order_line_id") @db.Uuid
+  productId           String   @map("product_id") @db.Uuid
+  quantityExpected    Int?     @map("quantity_expected")
+  quantityReceived    Int      @map("quantity_received")
+  quantityPutaway     Int      @default(0) @map("quantity_putaway")
+  lotNumber           String?  @map("lot_number") @db.VarChar(100)
+  expirationDate      DateTime? @map("expiration_date") @db.Date
+  status              String   @default("RECEIVED") @db.VarChar(20)
+  notes               String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  receipt           Receipt            @relation(fields: [receiptId], references: [id])
+  purchaseOrderLine PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+  product           Product            @relation(fields: [productId], references: [id])
+
+  @@unique([receiptId, lineNumber])
+  @@map("receipt_lines")
+}
+
+// ============================================================================
+// SALES ORDERS & FULFILLMENT
+// ============================================================================
+
+model SalesOrder {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  orderNumber     String    @map("order_number") @db.VarChar(50)
+  externalOrderId String?   @map("external_order_id") @db.VarChar(100)
+  channel         String    @default("DIRECT") @db.VarChar(50)
+  status          String    @default("PENDING") @db.VarChar(20)
+  priority        Int       @default(5)
+  customerName    String?   @map("customer_name") @db.VarChar(255)
+  customerEmail   String?   @map("customer_email") @db.VarChar(255)
+  shippingAddress Json?     @map("shipping_address")
+  billingAddress  Json?     @map("billing_address")
+  shippingMethod  String?   @map("shipping_method") @db.VarChar(50)
+  requestedDate   DateTime? @map("requested_date") @db.Date
+  promisedDate    DateTime? @map("promised_date") @db.Date
+  shippedDate     DateTime? @map("shipped_date") @db.Date
+  totalAmount     Decimal?  @map("total_amount") @db.Decimal(12, 2)
+  currency        String    @default("USD") @db.VarChar(3)
+  notes           String?
+  createdBy       String    @map("created_by") @db.VarChar(255)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id])
+  lines  SalesOrderLine[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, externalOrderId])
+  @@map("sales_orders")
+}
+
+model SalesOrderLine {
+  id               String   @id @default(uuid()) @db.Uuid
+  salesOrderId     String   @map("sales_order_id") @db.Uuid
+  lineNumber       Int      @map("line_number")
+  productId        String   @map("product_id") @db.Uuid
+  quantityOrdered  Int      @map("quantity_ordered")
+  quantityReserved Int      @default(0) @map("quantity_reserved")
+  quantityPicked   Int      @default(0) @map("quantity_picked")
+  quantityShipped  Int      @default(0) @map("quantity_shipped")
+  unitPrice        Decimal? @map("unit_price") @db.Decimal(10, 4)
+  status           String   @default("PENDING") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
+
+  @@unique([salesOrderId, lineNumber])
+  @@map("sales_order_lines")
+}
+
+// ============================================================================
+// TRANSFERS
+// ============================================================================
+
+model Transfer {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  transferNumber      String    @map("transfer_number") @db.VarChar(50)
+  fromWarehouseId     String    @map("from_warehouse_id") @db.Uuid
+  toWarehouseId       String?   @map("to_warehouse_id") @db.Uuid
+  status              String    @default("DRAFT") @db.VarChar(20)
+  transferType        String    @default("INTERNAL") @map("transfer_type") @db.VarChar(20)
+  expectedArrival     DateTime? @map("expected_arrival")
+  notes               String?
+  initiatedBy         String    @map("initiated_by") @db.VarChar(255)
+  initiatedAt         DateTime  @map("initiated_at")
+  completedBy         String?   @map("completed_by") @db.VarChar(255)
+  completedAt         DateTime? @map("completed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  fromWarehouse Warehouse      @relation(fields: [fromWarehouseId], references: [id])
+  lines         TransferLine[]
+
+  @@unique([tenantId, transferNumber])
+  @@index([tenantId, status])
+  @@map("transfers")
+}
+
+model TransferLine {
+  id               String   @id @default(uuid()) @db.Uuid
+  transferId       String   @map("transfer_id") @db.Uuid
+  lineNumber       Int      @map("line_number")
+  productId        String   @map("product_id") @db.Uuid
+  lotBatchId       String?  @map("lot_batch_id") @db.Uuid
+  fromLocationId   String   @map("from_location_id") @db.Uuid
+  toLocationId     String?  @map("to_location_id") @db.Uuid
+  quantityRequested Int     @map("quantity_requested")
+  quantityShipped  Int      @default(0) @map("quantity_shipped")
+  quantityReceived Int      @default(0) @map("quantity_received")
+  status           String   @default("PENDING") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  transfer Transfer @relation(fields: [transferId], references: [id])
+
+  @@unique([transferId, lineNumber])
+  @@map("transfer_lines")
+}
+
+// ============================================================================
+// CYCLE COUNTING
+// ============================================================================
+
+model CycleCountPlan {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  name          String   @db.VarChar(255)
+  description   String?
+  countType     String   @map("count_type") @db.VarChar(20) // ABC, FULL, RANDOM, LOCATION
+  frequency     String   @db.VarChar(20) // DAILY, WEEKLY, MONTHLY, QUARTERLY
+  criteria      Json     @default("{}")
+  isActive      Boolean  @default(true) @map("is_active")
+  lastRunAt     DateTime? @map("last_run_at")
+  nextRunAt     DateTime? @map("next_run_at")
+  createdBy     String   @map("created_by") @db.VarChar(255)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant            @relation(fields: [tenantId], references: [id])
+  tasks  CycleCountTask[]
+
+  @@index([tenantId, isActive])
+  @@map("cycle_count_plans")
+}
+
+model CycleCountTask {
+  id            String    @id @default(uuid()) @db.Uuid
+  planId        String    @map("plan_id") @db.Uuid
+  locationId    String    @map("location_id") @db.Uuid
+  productId     String    @map("product_id") @db.Uuid
+  lotBatchId    String?   @map("lot_batch_id") @db.Uuid
+  expectedQty   Int       @map("expected_qty")
+  countedQty    Int?      @map("counted_qty")
+  variance      Int?
+  status        String    @default("PENDING") @db.VarChar(20)
+  countedBy     String?   @map("counted_by") @db.VarChar(255)
+  countedAt     DateTime? @map("counted_at")
+  verifiedBy    String?   @map("verified_by") @db.VarChar(255)
+  verifiedAt    DateTime? @map("verified_at")
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  plan CycleCountPlan @relation(fields: [planId], references: [id])
+
+  @@index([planId, status])
+  @@map("cycle_count_tasks")
+}
+
+// ============================================================================
+// EVENT SOURCING & OUTBOX
+// ============================================================================
+
+model EventStore {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  eventId       String   @unique @map("event_id") @db.Uuid
+  eventType     String   @map("event_type") @db.VarChar(100)
+  eventVersion  Int      @default(1) @map("event_version")
+  aggregateType String   @map("aggregate_type") @db.VarChar(100)
+  aggregateId   String   @map("aggregate_id") @db.Uuid
+  correlationId String   @map("correlation_id") @db.Uuid
+  causationId   String?  @map("causation_id") @db.Uuid
+  occurredAt    DateTime @map("occurred_at")
+  payload       Json
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, aggregateType, aggregateId])
+  @@index([tenantId, eventType, occurredAt])
+  @@index([tenantId, correlationId])
+  @@map("event_store")
+}
+
+model OutboxMessage {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  eventId       String    @map("event_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(100)
+  routingKey    String    @map("routing_key") @db.VarChar(255)
+  payload       Json
+  status        String    @default("PENDING") @db.VarChar(20) // PENDING, PUBLISHED, FAILED
+  retryCount    Int       @default(0) @map("retry_count")
+  maxRetries    Int       @default(5) @map("max_retries")
+  lastError     String?   @map("last_error")
+  scheduledAt   DateTime  @default(now()) @map("scheduled_at")
+  publishedAt   DateTime? @map("published_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, status, scheduledAt])
+  @@index([tenantId, eventType])
+  @@map("outbox_messages")
+}
+
+// ============================================================================
+// AUDIT & IDEMPOTENCY
+// ============================================================================
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  userId        String?  @map("user_id") @db.VarChar(255)
+  action        String   @db.VarChar(100)
+  resourceType  String   @map("resource_type") @db.VarChar(100)
+  resourceId    String   @map("resource_id") @db.Uuid
+  changes       Json?
+  ipAddress     String?  @map("ip_address") @db.VarChar(45)
+  userAgent     String?  @map("user_agent") @db.VarChar(500)
+  correlationId String   @map("correlation_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, resourceType, resourceId])
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, correlationId])
+  @@map("audit_logs")
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  key          String   @db.VarChar(255)
+  commandType  String   @map("command_type") @db.VarChar(100)
+  payloadHash  String   @map("payload_hash") @db.VarChar(64)
+  response     Json?
+  status       String   @default("PROCESSING") @db.VarChar(20)
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([tenantId, key])
+  @@index([tenantId, expiresAt])
+  @@map("idempotency_keys")
+}

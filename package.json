@@ -1,0 +1,38 @@
+{
+  "name": "stockos",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@8.15.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:api": "pnpm --filter @stockos/api run dev",
+    "dev:worker": "pnpm --filter @stockos/worker run dev",
+    "build": "pnpm -r run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write .",
+    "db:generate": "pnpm --filter @stockos/db run db:generate",
+    "db:migrate": "pnpm --filter @stockos/db run db:migrate",
+    "db:push": "pnpm --filter @stockos/db run db:push",
+    "db:seed": "pnpm --filter @stockos/db run db:seed",
+    "db:studio": "pnpm --filter @stockos/db run db:studio",
+    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/docker-compose.yml down",
+    "setup": "pwsh scripts/dev-setup.ps1",
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "eslint": "^8.56.0",
+    "husky": "^9.0.0",
+    "prettier": "^3.2.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.2.0",
+    "@commitlint/cli": "^18.0.0",
+    "@commitlint/config-conventional": "^18.0.0"
+  }
+}

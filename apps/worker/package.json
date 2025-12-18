@@ -1,0 +1,27 @@
+{
+  "name": "@stockos/worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@stockos/contracts": "workspace:*",
+    "@stockos/domain": "workspace:*",
+    "@stockos/db": "workspace:*",
+    "@stockos/observability": "workspace:*",
+    "@stockos/agents": "workspace:*",
+    "amqplib": "^0.10.0",
+    "cron": "^3.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0",
+    "vitest": "^1.2.0",
+    "@types/amqplib": "^0.10.0",
+    "@types/node": "^20.10.0"
+  }
+}
