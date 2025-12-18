@@ -1,0 +1,973 @@
+{
+  "name": "STOCKOS - Inventory Management Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "stockos-webhook",
+        "options": {}
+      },
+      "id": "webhook-receiver",
+      "name": "Webhook Receiver",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "stockos-events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-stock-updated",
+              "leftValue": "={{ $json.event_type }}",
+              "rightValue": "stock.updated",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "switch-event-type",
+      "name": "Route by Event Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [480, 300],
+      "routes": [
+        { "output": 0, "condition": "stock.updated" },
+        { "output": 1, "condition": "stock.low" },
+        { "output": 2, "condition": "order.created" },
+        { "output": 3, "condition": "order.shipped" }
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3000/api/v1/inventory/stock/{{ $json.payload.product_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "x-warehouse-id",
+              "value": "={{ $json.payload.warehouse_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-stock-level",
+      "name": "Get Current Stock Level",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [720, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-low-stock",
+              "leftValue": "={{ $json.available_quantity }}",
+              "rightValue": "={{ $json.reorder_point }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-threshold",
+      "name": "Check Stock Threshold",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 160]
+    },
+    {
+      "parameters": {
+        "channel": "#inventory-alerts",
+        "text": "=:warning: *Low Stock Alert*\n\n*Product:* {{ $json.product_name }}\n*SKU:* {{ $json.sku }}\n*Current Stock:* {{ $json.available_quantity }}\n*Reorder Point:* {{ $json.reorder_point }}\n*Warehouse:* {{ $json.warehouse_name }}\n\nAction required: Please reorder.",
+        "otherOptions": {}
+      },
+      "id": "slack-low-stock",
+      "name": "Slack - Low Stock Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1200, 80],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "inventory@stockos.local",
+        "toEmail": "={{ $json.manager_email }}",
+        "subject": "=Low Stock Alert: {{ $json.product_name }} ({{ $json.sku }})",
+        "emailType": "html",
+        "message": "=<h2>Low Stock Alert</h2><p>The following product has fallen below its reorder point:</p><table border='1' cellpadding='8'><tr><td><strong>Product</strong></td><td>{{ $json.product_name }}</td></tr><tr><td><strong>SKU</strong></td><td>{{ $json.sku }}</td></tr><tr><td><strong>Current Stock</strong></td><td>{{ $json.available_quantity }}</td></tr><tr><td><strong>Reorder Point</strong></td><td>{{ $json.reorder_point }}</td></tr><tr><td><strong>Warehouse</strong></td><td>{{ $json.warehouse_name }}</td></tr></table><p>Please take action to reorder this item.</p>",
+        "options": {}
+      },
+      "id": "email-low-stock",
+      "name": "Email - Low Stock Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3000/api/v1/inventory/movements",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "x-warehouse-id",
+              "value": "={{ $json.warehouse_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "product_id",
+              "value": "={{ $json.product_id }}"
+            },
+            {
+              "name": "quantity",
+              "value": "={{ $json.quantity }}"
+            },
+            {
+              "name": "movement_type",
+              "value": "={{ $json.movement_type }}"
+            },
+            {
+              "name": "from_location_id",
+              "value": "={{ $json.from_location_id }}"
+            },
+            {
+              "name": "to_location_id",
+              "value": "={{ $json.to_location_id }}"
+            },
+            {
+              "name": "reason",
+              "value": "={{ $json.reason }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-movement",
+      "name": "Create Stock Movement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3000/api/v1/orders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.order) }}",
+        "options": {}
+      },
+      "id": "process-order",
+      "name": "Process New Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [720, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:3000/api/v1/inventory/stock/availability",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "x-warehouse-id",
+              "value": "={{ $json.warehouse_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ warehouse_id: $json.warehouse_id, items: $json.order.items }) }}",
+        "options": {}
+      },
+      "id": "check-availability",
+      "name": "Check Stock Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [960, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "all-available",
+              "leftValue": "={{ $json.all_available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "availability-check",
+      "name": "All Items Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:3000/api/v1/orders/{{ $json.order_id }}/reserve",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "x-warehouse-id",
+              "value": "={{ $json.warehouse_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "reserve-stock",
+      "name": "Reserve Stock for Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1440, 360]
+    },
+    {
+      "parameters": {
+        "channel": "#orders",
+        "text": "=:package: *Order Confirmed*\n\n*Order ID:* {{ $json.order_id }}\n*Customer:* {{ $json.customer_name }}\n*Items:* {{ $json.items.length }}\n*Total:* {{ $json.total }}\n\nStock reserved successfully.",
+        "otherOptions": {}
+      },
+      "id": "slack-order-confirmed",
+      "name": "Slack - Order Confirmed",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1680, 360],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#orders",
+        "text": "=:warning: *Order On Hold - Insufficient Stock*\n\n*Order ID:* {{ $json.order_id }}\n*Customer:* {{ $json.customer_name }}\n\n*Unavailable Items:*\n{{ $json.unavailable_items.map(item => '- ' + item.product_name + ' (need: ' + item.requested + ', have: ' + item.available + ')').join('\\n') }}\n\nPlease review and take action.",
+        "otherOptions": {}
+      },
+      "id": "slack-order-hold",
+      "name": "Slack - Order On Hold",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1440, 520],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:3000/api/v1/orders/{{ $json.order_id }}/ship",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ carrier: $json.carrier, tracking_number: $json.tracking_number }) }}",
+        "options": {}
+      },
+      "id": "mark-shipped",
+      "name": "Mark Order Shipped",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [720, 580]
+    },
+    {
+      "parameters": {
+        "fromEmail": "orders@stockos.local",
+        "toEmail": "={{ $json.customer_email }}",
+        "subject": "=Your order {{ $json.order_id }} has been shipped!",
+        "emailType": "html",
+        "message": "=<h2>Your Order Has Shipped!</h2><p>Great news! Your order is on its way.</p><table border='1' cellpadding='8'><tr><td><strong>Order ID</strong></td><td>{{ $json.order_id }}</td></tr><tr><td><strong>Carrier</strong></td><td>{{ $json.carrier }}</td></tr><tr><td><strong>Tracking Number</strong></td><td>{{ $json.tracking_number }}</td></tr></table><p><a href='{{ $json.tracking_url }}'>Track your package</a></p>",
+        "options": {}
+      },
+      "id": "email-shipped",
+      "name": "Email - Shipment Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [960, 580]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-stock-check",
+      "name": "Hourly Stock Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 700]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:3000/api/v1/inventory/stock/low",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "11111111-1111-1111-1111-111111111111"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-low-stock",
+      "name": "Get All Low Stock Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $json.items.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-low-stock",
+      "name": "Has Low Stock Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 700]
+    },
+    {
+      "parameters": {
+        "channel": "#inventory-alerts",
+        "text": "=:chart_with_downwards_trend: *Hourly Low Stock Report*\n\n*{{ $json.items.length }} items below reorder point:*\n\n{{ $json.items.slice(0, 10).map(item => '• ' + item.sku + ' - ' + item.product_name + ' (' + item.available + '/' + item.reorder_point + ')').join('\\n') }}\n\n{{ $json.items.length > 10 ? '... and ' + ($json.items.length - 10) + ' more items' : '' }}",
+        "otherOptions": {}
+      },
+      "id": "slack-hourly-report",
+      "name": "Slack - Hourly Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [960, 620],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily-report",
+      "name": "Daily Report (8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 860]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:3000/api/v1/analytics/daily-summary",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "11111111-1111-1111-1111-111111111111"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-daily-summary",
+      "name": "Get Daily Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 860]
+    },
+    {
+      "parameters": {
+        "channel": "#inventory-reports",
+        "text": "=:bar_chart: *Daily Inventory Report - {{ $today.format('YYYY-MM-DD') }}*\n\n*Movements:*\n• Inbound: {{ $json.inbound_count }} ({{ $json.inbound_units }} units)\n• Outbound: {{ $json.outbound_count }} ({{ $json.outbound_units }} units)\n• Transfers: {{ $json.transfer_count }}\n\n*Stock Status:*\n• Total SKUs: {{ $json.total_skus }}\n• Low Stock Items: {{ $json.low_stock_count }}\n• Out of Stock: {{ $json.out_of_stock_count }}\n\n*Orders:*\n• New: {{ $json.new_orders }}\n• Shipped: {{ $json.shipped_orders }}\n• Pending: {{ $json.pending_orders }}",
+        "otherOptions": {}
+      },
+      "id": "slack-daily-report",
+      "name": "Slack - Daily Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [720, 860],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "stockos-receiving",
+        "options": {}
+      },
+      "id": "webhook-receiving",
+      "name": "Receiving Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 1020],
+      "webhookId": "stockos-receiving"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3000/api/v1/receiving",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "x-warehouse-id",
+              "value": "={{ $json.warehouse_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.receiving) }}",
+        "options": {}
+      },
+      "id": "process-receiving",
+      "name": "Process Receiving",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 1020]
+    },
+    {
+      "parameters": {
+        "channel": "#warehouse",
+        "text": "=:inbox_tray: *Goods Received*\n\n*PO Number:* {{ $json.po_number }}\n*Supplier:* {{ $json.supplier_name }}\n*Items:* {{ $json.items.length }}\n*Received By:* {{ $json.received_by }}\n\n*Details:*\n{{ $json.items.map(item => '• ' + item.sku + ' - Qty: ' + item.quantity).join('\\n') }}",
+        "otherOptions": {}
+      },
+      "id": "slack-receiving",
+      "name": "Slack - Goods Received",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [720, 1020],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-expiry-check",
+      "name": "Daily Expiry Check (6 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 1180]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:3000/api/v1/inventory/lots/expiring",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "days",
+              "value": "30"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "11111111-1111-1111-1111-111111111111"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-expiring-lots",
+      "name": "Get Expiring Lots (30 days)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 1180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-expiring",
+              "leftValue": "={{ $json.lots.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-expiring-lots",
+      "name": "Has Expiring Lots?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 1180]
+    },
+    {
+      "parameters": {
+        "channel": "#quality",
+        "text": "=:warning: *Lot Expiration Alert*\n\n*{{ $json.lots.length }} lots expiring within 30 days:*\n\n{{ $json.lots.map(lot => '• ' + lot.lot_number + ' - ' + lot.product_name + ' (Expires: ' + lot.expiry_date + ', Qty: ' + lot.quantity + ')').join('\\n') }}\n\nPlease prioritize FEFO allocation or plan disposition.",
+        "otherOptions": {}
+      },
+      "id": "slack-expiry-alert",
+      "name": "Slack - Expiry Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [960, 1100],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-credentials",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Receiver": {
+      "main": [
+        [
+          {
+            "node": "Route by Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Event Type": {
+      "main": [
+        [
+          {
+            "node": "Get Current Stock Level",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Stock Movement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Process New Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Order Shipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Stock Level": {
+      "main": [
+        [
+          {
+            "node": "Check Stock Threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Stock Threshold": {
+      "main": [
+        [
+          {
+            "node": "Slack - Low Stock Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email - Low Stock Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process New Order": {
+      "main": [
+        [
+          {
+            "node": "Check Stock Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Stock Availability": {
+      "main": [
+        [
+          {
+            "node": "All Items Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Items Available?": {
+      "main": [
+        [
+          {
+            "node": "Reserve Stock for Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack - Order On Hold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve Stock for Order": {
+      "main": [
+        [
+          {
+            "node": "Slack - Order Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Order Shipped": {
+      "main": [
+        [
+          {
+            "node": "Email - Shipment Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hourly Stock Check": {
+      "main": [
+        [
+          {
+            "node": "Get All Low Stock Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Low Stock Items": {
+      "main": [
+        [
+          {
+            "node": "Has Low Stock Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Low Stock Items?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Hourly Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Report (8 AM)": {
+      "main": [
+        [
+          {
+            "node": "Get Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Slack - Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receiving Webhook": {
+      "main": [
+        [
+          {
+            "node": "Process Receiving",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Receiving": {
+      "main": [
+        [
+          {
+            "node": "Slack - Goods Received",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Expiry Check (6 AM)": {
+      "main": [
+        [
+          {
+            "node": "Get Expiring Lots (30 days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Expiring Lots (30 days)": {
+      "main": [
+        [
+          {
+            "node": "Has Expiring Lots?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Expiring Lots?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Expiry Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "inventory",
+      "id": "1"
+    },
+    {
+      "name": "wms",
+      "id": "2"
+    },
+    {
+      "name": "stockos",
+      "id": "3"
+    }
+  ],
+  "triggerCount": 4,
+  "pinData": {}
+}
